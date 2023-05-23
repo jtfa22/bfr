@@ -1,47 +1,55 @@
+#include "ahrs.h"
 #include <Wire.h>
-#include <LSM6.h>
 #include <LPS.h>
+#include <LSM6.h>
 #include "SparkFunLSM6DS3.h"
+#include <LIS3MDL.h>
 #include <SD.h>
 
 const int led = LED_BUILTIN;
 int ledIter=0;
 LPS ps;
 LSM6DS3 imu;
+LIS3MDL mag;
 //char report[80];
 const int chipSelect =  BUILTIN_SDCARD;
 const int desiredDelay=50; //20 Hz
 long int t0;
 String filename;
- 
+
+long int lastTime = 0;
+
 void setup() {
   // put your setup code here, to run once:
   pinMode(led, OUTPUT);
   Serial.begin(38400);
-//  Wire.setSDA(25);Wire.setSCL(24);
   Wire2.begin();
+
+//  initialize Pressure
   if (!ps.init())
   {
-    Serial.println("Failed to autodetect pressure sensor!");
-    while (1) {
-      Serial.println("Failed to autodetect pressure sensor!");
-      delay(10);
-    };
+    while(1){Serial.println("Failed to autodetect pressure sensor!"); delay(10);};
   }
   ps.enableDefault();
+
+//  initialize IMU
   if (imu.begin() != 0)
   {
-    Serial.println("Failed to detect and initialize IMU!");
-    while (1) {
-      Serial.println("Failed to detect and initialize IMU!");
-      delay(10);
-    };
+    while(1){Serial.println("Failed to detect and initialize IMU!"); delay(10);};
   }
   imu.settings.accelRange = 16;      //Max G force readable.  Can be: 2, 4, 8, 16
   imu.settings.gyroRange = 2000;   //Max deg/s.  Can be: 125, 245, 500, 1000, 2000
   imu.begin();
   
-//  imu.enableDefault();
+// initialize mag
+ if (!mag.init())
+  {
+    while(1){Serial.println("Failed to detect and initialize magnetometer!"); delay(10);};
+  }
+
+  mag.enableDefault();
+
+
   
   // see if the card is present and can be initialized:
   if (!SD.begin(chipSelect)) {
@@ -73,6 +81,7 @@ void setup() {
 //  Serial.println(F_CPU_ACTUAL);
 //  dataFile = SD.open("datalog.txt", FILE_WRITE);
   t0=millis();
+  lastTime = millis();
 }
   
 
@@ -92,7 +101,7 @@ void loop() {
   float pressure = ps.readPressureMillibars();
   float altitude = ps.pressureToAltitudeMeters(pressure);
   float temperature = ps.readTemperatureC();
-  dataString="Time [ms]: "+ String(t1-t0) +", p [mbar]: " + String(pressure) + ", alt [m]: "+ String(altitude) +", T [c]: " + String(temperature);
+//  dataString="Time [ms]: "+ String(t1-t0) +", p [mbar]: " + String(pressure) + ", alt [m]: "+ String(altitude) +", T [c]: " + String(temperature);
 //  dataString=String(t1-t0) +", " + String(pressure) + ", "+ String(altitude) +", " + String(temperature);
   float ax=imu.readFloatAccelX();
   float ay=imu.readFloatAccelY();
@@ -100,11 +109,18 @@ void loop() {
   float gx=imu.readFloatGyroX();
   float gy=imu.readFloatGyroY();
   float gz=imu.readFloatGyroZ();
+    mag.read();
 
   dataString=dataString+", accel [g]: " + String(ax) + " " + String(ay) + " " + String(az);
   dataString=dataString+ ", gyro [deg/sec]: " + String(gx) + " " + String(gy) + " " + String(gz);
+//  dataString=dataString+", mag: " + String(mag.m.x) + " " + String(mag.m.y) + " " + String(mag.m.z);
 //  dataString=dataString+", " + String(ax) + ", " + String(ay) + ", " + String(az);
 //  dataString=dataString+ ", " + String(gx) + ", " + String(gy) + ", " + String(gz);
+
+float dt = (millis() - lastTime)/1000.0; lastTime=millis();
+AHRSupdate(dt,gx,gy,gz,ax,ay,az,float(mag.m.x),float(mag.m.y),float(mag.m.z));
+dataString=dataString+" q: "+" "+String(q0)+" "+String(q1)+" "+String(q2)+" "+String(q3);
+
   // open the file.
   File dataFile = SD.open(filename.c_str(), FILE_WRITE);
 
