@@ -7,6 +7,7 @@
 #include <Servo.h>
 #include <Math.h>
 #include "SensorFusion.h"
+#include <Geometry.h>
 
 const int led = LED_BUILTIN;
 int ledIter=0;
@@ -25,10 +26,14 @@ String filename;
 enum bfr_state{IDLE,PAD,LAUNCH,FLIGHT};
 enum bfr_state state = PAD;
 
+// q [1 0 0 0] is flat, starside down facing North (NED)
+Geometry::Quaternion q_set = {0,0,0,1};
+
+// AHRS
 float ax_0=0; float ay_0=0; float az_0=0;
-#define s_0v 20
+#define s_0v 50
 float gx_0v[s_0v]; float gy_0v[s_0v]; float gz_0v[s_0v]; uint8_t i_0v=0;
-#define s_rv 20 
+#define s_rv 50 
 float gx_rv[s_rv]; float gy_rv[s_rv]; float gz_rv[s_rv]; uint8_t i_rv=0;
 float gx_r=0; float gy_r=0; float gz_r=0;
 float gx_0=0; float gy_0=0; float gz_0=0;
@@ -111,26 +116,29 @@ void loop() {
   float ax=ax_r-ax_0; float ay=ay_r-ay_0; float az=az_r-az_0; 
   // smooth out noisy gyro measurements
   gx_rv[i_rv]=imu.readFloatGyroX(); gy_rv[i_rv]=imu.readFloatGyroY(); gz_rv[i_rv]=imu.readFloatGyroZ(); i_rv=(i_rv+1)%s_rv;
+  float gx_rp=gx_r; float gy_rp=gy_r; float gz_rp=gz_r;
   gx_r=0; gy_r=0; gz_r=0;
   // average across array
   for(uint8_t i=0; i<s_rv; i++) {
     gx_r+=gx_rv[i]; gy_r+=gy_rv[i]; gz_r+=gz_rv[i];
   }
   gx_r/=s_rv; gy_r/=s_rv; gz_r/=s_rv;
-  float gx=gx_r-gx_0; float gy=gy_r-gy_0; float gz=gz_r-gz_0;
+  float gx=(gx_r-gx_0)*DEG_TO_RAD; float gy=(gy_r-gy_0)*DEG_TO_RAD; float gz=(gz_r-gz_0)*DEG_TO_RAD;
 
   mag.read();
   float mx=mag.m.x; float my=mag.m.y; float mz=mag.m.z;
 
   float dt = ahrs.deltatUpdate(); time_p = millis();
   ahrs.MadgwickUpdate(gx,gy,gz,ax,ay,az,mx,my,mz,dt);
-  float* q = ahrs.getQuat();
+//  ahrs.MadgwickUpdate(gx,gy,gz,ax,ay,az,dt);
+  float* q_r = ahrs.getQuat();
+  Geometry::Quaternion q_imu = {q_r[1],q_r[2],q_r[3],q_r[0]};
 
   // // // // // // // // //
   // STATE TRANSITION LOGIC
   // // // // // // // // //
 //  stop updating offset
-  if (millis()-time_0 > 5000) {
+  if (millis()-time_0 > 1000) {
     state = IDLE;
   }
 
@@ -138,10 +146,7 @@ void loop() {
   // STATE IDLE
   // // // // // // // // //
   if (state == IDLE) {
-//    if gyro small, remove
-    if (sqrt(gx*gx+gy*gy+gz*gz) < 10) {
-      update_offsets();
-    }
+
   }
 
   // // // // // // // // //
@@ -149,7 +154,7 @@ void loop() {
   // // // // // // // // //
   else if (state == PAD) {
     update_offsets();
-    
+    q_set = q_imu;
   }
 
   // // // // // // // // //
@@ -171,11 +176,13 @@ void loop() {
   // // // // // // // // //
   if (millis()-time_print > 100) { time_print = millis();
 //    String ds = "ACC "+String(ax)+" "+String(ay)+" "+String(az)+" GYR "+String(gx)+" "+String(gy)+" "+String(gz)+" Q "+String(q0)+" "+String(q1)+" "+String(q2)+" "+String(q3);
-    String ds = String(gx)+" "+String(gy)+" "+String(gz);//+" "+String(gx_r)+" "+String(gy_r)+" "+String(gz_r)+" "+String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
-//    String ds = String(q[0])+" "+String(q[1])+" "+String(q[2])+" "+String(q[3]);
+//    String ds = String(gx)+" "+String(gy)+" "+String(gz);//+" "+String(gx_r)+" "+String(gy_r)+" "+String(gz_r)+" "+String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
 //    String ds = String(mag.m.x)+" "+String(mag.m.y)+" "+String(mag.m.z);
 //    String ds = String(ax)+" "+String(ay)+" "+String(az);
+//    String ds = String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
 //    String ds = String(ahrs.getRoll())+" "+String(ahrs.getPitch())+" "+String(ahrs.getYaw());
+//    String ds = String(q_set.w())+" "+String(q_set.x())+" "+String(q_set.y())+" "+String(q_set.z());
+    String ds = String(q_imu.w())+" "+String(q_imu.x())+" "+String(q_imu.y())+" "+String(q_imu.z());
     Serial.println(ds);
   }
 
