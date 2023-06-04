@@ -24,20 +24,23 @@ String filename;
 
 // controls
 enum bfr_state{IDLE,PAD,LAUNCH,FLIGHT};
-enum bfr_state state = PAD;
+enum bfr_state state = IDLE;
 
 // PD controller
-#define Kp 0.1
-#define Kd 0.01
+#define Kp 10
+#define Kd 1
 // mixer gains
-#define Lx 1
-#define Ly 1
-#define Lz 1
+#define Lx 3
+#define Ly 3
+#define Lz 2
 // servo lims
 #define contr_min -100
 #define contr_max 100
 #define servo_min 1500 // microsec
 #define servo_max 1900
+
+float L1, L2, L3;
+uint16_t u1, u2, u3;
 
 // q [1 0 0 0] is flat, starside down facing North (NED)
 quat_t q_set = {1,0,0,0};
@@ -57,6 +60,10 @@ long int time_0=0; // initial time
 long int time_p=0; // previous step time
 long int time_zero=0;
 long int time_print=0;
+long int time_idle=0;
+long int time_pad=0; bool pad_upright=false;
+long int time_launch=0;
+long int time_flight=0;
 
 //helper functions
 void update_offsets();
@@ -125,18 +132,19 @@ void loop() {
   // READ SENSORS
   // // // // // // // // //
   float pressure = ps.readPressureMillibars(); float altitude = ps.pressureToAltitudeMeters(pressure); float temperature = ps.readTemperatureC();
-  float ax_r=imu.readFloatAccelX(); float ay_r=imu.readFloatAccelY(); float az_r=imu.readFloatAccelZ(); 
-  ax_rv[i_rv]=ax_r; ay_rv[i_rv]=ay_r; az_rv[i_rv]=az_r;
-  float ax=ax_r-ax_0; float ay=ay_r-ay_0; float az=az_r-az_0; 
+  ax_rv[i_rv]=imu.readFloatAccelX(); ay_rv[i_rv]=imu.readFloatAccelY(); az_rv[i_rv]=imu.readFloatAccelZ();
   // smooth out noisy gyro measurements
   gx_rv[i_rv]=imu.readFloatGyroX(); gy_rv[i_rv]=imu.readFloatGyroY(); gz_rv[i_rv]=imu.readFloatGyroZ(); i_rv=(i_rv+1)%s_rv;
-  float gx_rp=gx_r; float gy_rp=gy_r; float gz_rp=gz_r;
   gx_r=0; gy_r=0; gz_r=0;
   // average across array
+  float ax_r=0; float ay_r=0; float az_r=0;
   for(uint8_t i=0; i<s_rv; i++) {
     gx_r+=gx_rv[i]; gy_r+=gy_rv[i]; gz_r+=gz_rv[i];
+    ax_r+=ax_rv[i]; ay_r+=ay_rv[i]; az_r+=az_rv[i];
   }
   gx_r/=s_rv; gy_r/=s_rv; gz_r/=s_rv;
+  ax_r/=s_rv; ay_r/=s_rv; az_r/=s_rv;
+  float ax=ax_r-ax_0; float ay=ay_r-ay_0; float az=az_r-az_0; 
   float gx=(gx_r-gx_0)*DEG_TO_RAD; float gy=(gy_r-gy_0)*DEG_TO_RAD; float gz=(gz_r-gz_0)*DEG_TO_RAD;
 
   mag.read();
@@ -151,22 +159,44 @@ void loop() {
   // // // // // // // // //
   // STATE TRANSITION LOGIC
   // // // // // // // // //
-//  stop updating offset
-  if (millis()-time_0 > 1000) {
+  if (millis()-time_0 > 5000) {
+    state = FLIGHT;
+  }
+  
+// IDLE TO PAD
+  float a_norm = sqrt(ax_r*ax_r + ay_r*ay_r + az_r*az_r);
+  if (state == IDLE && ax_r > 0.95 && a_norm > 0.95 && a_norm < 1.05) {
+    if (pad_upright) {
+      if (millis()-time_pad > 2000){
+        state = PAD;
+      }
+    } else {pad_upright = true; time_pad = millis();}
+  } else {pad_upright = false;}
+  
+//  PAD TO IDLE
+  if (state == PAD && ax_r < 0.95 && a_norm > 0.95 && a_norm < 1.05) {
     state = IDLE;
+  }
+
+//  LAUNCH TO FLIGHT
+  if (millis()-time_launch>1400) {
+    state = FLIGHT;
   }
 
   // // // // // // // // //
   // STATE IDLE
   // // // // // // // // //
   if (state == IDLE) {
-
+//    light
+    if (millis()-time_idle>=1000) {digitalWrite(led, HIGH); time_idle = millis();} 
+    else {digitalWrite(led, LOW);}
   }
 
   // // // // // // // // //
   // STATE PAD
   // // // // // // // // //
   else if (state == PAD) {
+    digitalWrite(led, HIGH);
     update_offsets();
     q_set = q_imu;
   }
@@ -175,31 +205,39 @@ void loop() {
   // STATE LAUNCH
   // // // // // // // // //
   else if (state == LAUNCH) {
-    
+
   }
 
   // // // // // // // // //
   // STATE FLIGHT
   // // // // // // // // //
   else if (state == FLIGHT) {
+    //    light
+    if (millis()-time_idle>=200) {digitalWrite(led, HIGH); time_idle = millis();} 
+    else {digitalWrite(led, LOW);}
+    
     quat_t q_diff = q_set * q_imu.conj();
     int8_t sgn = 1;
     if (q_diff.get(0) < 0) { sgn = -1; }
     
-//    PD controller
-    float Mbx = - sgn * Kp * q_diff.get(1) - Kd * gx;
-    float Mby = - sgn * Kp * q_diff.get(2) - Kd * gy;
-    float Mbz = - sgn * Kp * q_diff.get(3) - Kd * gz;
+//    PD controller - diff coordinates based on Controls Scheme
+    float Mbx = - sgn * Kp * q_diff.get(2) - Kd * gy;
+    float Mby = - sgn * Kp * q_diff.get(3) - Kd * gz;
+    float Mbz = - sgn * Kp * q_diff.get(1) - Kd * gx;
 //    allcation
     Mbx *= Lx; Mby *= Ly; Mbz *= Lz;
     float sq3 = sqrt(3);
-    float L1 =        0 + 2*Mby + Mbz;
-    float L2 = -sq3*Mbx -   Mby + Mbz;
-    float L3 =  sq3*Mbx -   Mby + Mbz;
+    L1 =        0 + 2*Mby + Mbz;
+    L2 = -sq3*Mbx -   Mby + Mbz;
+    L3 =  sq3*Mbx -   Mby + Mbz;
 //    fin mapping
-    uint16_t u1 = map(L1,contr_min,contr_max,servo_min,servo_max);
-    uint16_t u2 = map(L2,contr_min,contr_max,servo_min,servo_max);
-    uint16_t u3 = map(L3,contr_min,contr_max,servo_min,servo_max);
+    u1 = map(L1,contr_min,contr_max,servo_min,servo_max);
+    u2 = map(L2,contr_min,contr_max,servo_min,servo_max);
+    u3 = map(L3,contr_min,contr_max,servo_min,servo_max);
+//    limit
+    u1 = min(servo_max,max(servo_min,u1));
+    u2 = min(servo_max,max(servo_min,u2));
+    u3 = min(servo_max,max(servo_min,u3));
 //    servo output
     fin1.writeMicroseconds(u1); fin2.writeMicroseconds(u2); fin3.writeMicroseconds(u3);
   }
@@ -210,12 +248,13 @@ void loop() {
   if (millis()-time_print > 100) { time_print = millis();
 //    String ds = "ACC "+String(ax)+" "+String(ay)+" "+String(az)+" GYR "+String(gx)+" "+String(gy)+" "+String(gz)+" Q "+String(q0)+" "+String(q1)+" "+String(q2)+" "+String(q3);
 //    String ds = String(gx)+" "+String(gy)+" "+String(gz);//+" "+String(gx_r)+" "+String(gy_r)+" "+String(gz_r)+" "+String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
-    String ds = String(mag.m.x)+" "+String(mag.m.y)+" "+String(mag.m.z);
-//    String ds = String(ax)+" "+String(ay)+" "+String(az);
+    // String ds = String(mag.m.x)+" "+String(mag.m.y)+" "+String(mag.m.z);
+//   String ds = String(ax)+" "+String(ay)+" "+String(az);
 //    String ds = String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
 //    String ds = String(ahrs.getRoll())+" "+String(ahrs.getPitch())+" "+String(ahrs.getYaw());
 //    String ds = String(q_set.w())+" "+String(q_set.x())+" "+String(q_set.y())+" "+String(q_set.z());
 //    String ds = String(q_imu.get(0))+" "+String(q_imu.get(1))+" "+String(q_imu.get(2))+" "+String(q_imu.get(3));
+    String ds = String(u1)+" "+String(u2)+" "+String(u3);
     Serial.println(ds);
   }
 
