@@ -27,7 +27,7 @@ enum bfr_state{IDLE,PAD,LAUNCH,FLIGHT};
 enum bfr_state state = IDLE;
 
 // PD controller
-#define Kp 10
+#define Kp 15
 #define Kd 1
 // mixer gains
 #define Lx 3
@@ -36,8 +36,8 @@ enum bfr_state state = IDLE;
 // servo lims
 #define contr_min -100
 #define contr_max 100
-#define servo_min 1500 // microsec
-#define servo_max 1900
+#define servo_min 1000 // microsec
+#define servo_max 2000
 
 float L1, L2, L3;
 uint16_t u1, u2, u3;
@@ -60,8 +60,9 @@ long int time_0=0; // initial time
 long int time_p=0; // previous step time
 long int time_zero=0;
 long int time_print=0;
-long int time_idle=0;
-long int time_pad=0; bool pad_upright=false;
+long int time_led=0;
+long int time_pad=0; bool debounce_pad=false;
+long int time_burn=0; bool debounce_burn=false;
 long int time_launch=0;
 long int time_flight=0;
 
@@ -76,13 +77,21 @@ void setup() {
 
 //  initialize Pressure
   if (!ps.init()) {
-    while(1){Serial.println("Failed to autodetect pressure sensor!"); delay(10);};
+    while(1){
+      Serial.println("Failed to autodetect pressure sensor!");
+      digitalWrite(led, HIGH); delay(100);
+      digitalWrite(led, LOW ); delay(100);
+    };
   }
   ps.enableDefault();
 
 //  initialize IMU
   if (imu.begin() != 0) {
-    while(1){Serial.println("Failed to detect and initialize IMU!"); delay(10);};
+    while(1){
+      Serial.println("Failed to detect and initialize IMU!");
+      digitalWrite(led, HIGH); delay(100);
+      digitalWrite(led, LOW ); delay(100);
+    };
   }
   imu.settings.accelRange = 16;      //Max G force readable.  Can be: 2, 4, 8, 16
   imu.settings.gyroRange = 2000;   //Max deg/s.  Can be: 125, 245, 500, 1000, 2000
@@ -90,39 +99,52 @@ void setup() {
   
 // initialize mag
   if (!mag.init()) {
-    while(1){Serial.println("Failed to detect and initialize magnetometer!"); delay(10);};
+    while(1){
+      Serial.println("Failed to detect and initialize magnetometer!");
+      digitalWrite(led, HIGH); delay(100);
+      digitalWrite(led, LOW ); delay(100);
+    };
   }
   mag.enableDefault();
 
 // initialize servo
-  fin1.attach(0); fin2.attach(0); fin3.attach(0); // TODO
-  
+  fin1.attach(0); fin2.attach(1); fin3.attach(2); 
+  fin1.writeMicroseconds(servo_min); fin2.writeMicroseconds(servo_min); fin3.writeMicroseconds(servo_max);
+  delay(500);
+  fin1.writeMicroseconds(servo_max); fin2.writeMicroseconds(servo_max); fin3.writeMicroseconds(servo_max);
+  delay(500);
+  fin1.writeMicroseconds(1500); fin2.writeMicroseconds(1500); fin3.writeMicroseconds(1500);
+
   // see if the card is present and can be initialized:
   if (!SD.begin(chipSelect)) {
-    Serial.println("Card failed, or not present");
     while (1) {
       // No SD card, so don't do anything more - stay stuck here
       Serial.println("Card failed, or not present");
-      delay(10);
+      digitalWrite(led, HIGH); delay(100);
+      digitalWrite(led, LOW ); delay(100);
     }
   } else {
     int i=0;
-    filename="datalog_"+String(i)+".txt";
+    filename="BFR_log_"+String(i)+".txt";
     while (SD.exists(filename.c_str())) {
       i+=1;
-      filename="datalog_"+String(i)+".txt";
+      filename="BFR_log_"+String(i)+".txt";
     }
 //     Serial.println("Card initialized, logging to: "+ filename);
   }
   File dataFile = SD.open(filename.c_str(), FILE_WRITE);
   if (dataFile) {
-    dataFile.println("Time [ms], p [mbar], alt [m], T [c], accel x [g], accel y [g], accel z [g], gyro x [deg/sec], gyro y [deg/sec], gyro z [deg/sec]"  );
+    dataFile.println("t [ms], p [mbar], alt [m], T [c], ax [g], ay [g], az [g], gx [rad/s], gy [rad/s], gz [rad/s], q1, q2, q3, q4, state, u1, u2, u3");
     dataFile.close();
-//    Serial.println("Time [ms], p [mbar], alt [m], T [c], accel x [g], accel y [g], accel z [g], gyro x [deg/sec], gyro y [deg/sec], gyro z [deg/sec]");
   } else {
-//    while (1){Serial.println("error opening datalog.txt"); delay(10);}
+   while (1){
+    Serial.println("Error opening " + filename);
+    digitalWrite(led, HIGH); delay(100);
+    digitalWrite(led, LOW ); delay(100);
+    }
   }
 
+  // init timers
   time_0=millis(); time_p=millis();
 }
 
@@ -136,6 +158,7 @@ void loop() {
   // smooth out noisy gyro measurements
   gx_rv[i_rv]=imu.readFloatGyroX(); gy_rv[i_rv]=imu.readFloatGyroY(); gz_rv[i_rv]=imu.readFloatGyroZ(); i_rv=(i_rv+1)%s_rv;
   gx_r=0; gy_r=0; gz_r=0;
+  
   // average across array
   float ax_r=0; float ay_r=0; float az_r=0;
   for(uint8_t i=0; i<s_rv; i++) {
@@ -147,9 +170,9 @@ void loop() {
   float ax=ax_r-ax_0; float ay=ay_r-ay_0; float az=az_r-az_0; 
   float gx=(gx_r-gx_0)*DEG_TO_RAD; float gy=(gy_r-gy_0)*DEG_TO_RAD; float gz=(gz_r-gz_0)*DEG_TO_RAD;
 
-  mag.read();
-  float mx=mag.m.x; float my=mag.m.y; float mz=mag.m.z;
+  mag.read(); float mx=mag.m.x; float my=mag.m.y; float mz=mag.m.z;
 
+  // AHRS update
   float dt = ahrs.deltatUpdate(); time_p = millis();
   ahrs.MadgwickUpdate(gx,gy,gz,ax,ay,az,mx,my,mz,dt);
 //  ahrs.MadgwickUpdate(gx,gy,gz,ax,ay,az,dt);
@@ -159,28 +182,42 @@ void loop() {
   // // // // // // // // //
   // STATE TRANSITION LOGIC
   // // // // // // // // //
-  if (millis()-time_0 > 5000) {
-    state = FLIGHT;
+  if (millis()-time_0 > 10000) {
+    state = FLIGHT; time_flight = millis();
   }
   
 // IDLE TO PAD
   float a_norm = sqrt(ax_r*ax_r + ay_r*ay_r + az_r*az_r);
   if (state == IDLE && ax_r > 0.95 && a_norm > 0.95 && a_norm < 1.05) {
-    if (pad_upright) {
-      if (millis()-time_pad > 2000){
-        state = PAD;
+    if (debounce_pad) {
+      if (millis()-time_pad > 5000){
+        state = PAD; debounce_pad = false;
       }
-    } else {pad_upright = true; time_pad = millis();}
-  } else {pad_upright = false;}
+    } else {debounce_pad = true; time_pad = millis();}
+  } else {debounce_pad = false;}
   
-//  PAD TO IDLE
+//  EXIT PAD TO IDLE
   if (state == PAD && ax_r < 0.95 && a_norm > 0.95 && a_norm < 1.05) {
     state = IDLE;
   }
 
+// PAD TO LAUNCH
+  if (state == PAD && ax_r > 10) {
+    if (debounce_burn) {
+      if (millis()-time_burn > 250){
+        state = LAUNCH; time_launch = millis(); debounce_burn = false;
+      }
+    } else {debounce_burn = true; time_burn = millis();}
+  } else {debounce_burn = false;}
+
 //  LAUNCH TO FLIGHT
-  if (millis()-time_launch>1400) {
-    state = FLIGHT;
+  if (state == LAUNCH && millis()-time_launch>1400) {
+    state = FLIGHT; time_flight = millis();
+  }
+
+  //  FLIGHT TO IDLE
+  if (state == FLIGHT && millis()-time_flight>10000) {
+    state = IDLE;
   }
 
   // // // // // // // // //
@@ -188,8 +225,10 @@ void loop() {
   // // // // // // // // //
   if (state == IDLE) {
 //    light
-    if (millis()-time_idle>=1000) {digitalWrite(led, HIGH); time_idle = millis();} 
+    if (millis()-time_led>=1000) {digitalWrite(led, HIGH); time_led = millis();} 
     else {digitalWrite(led, LOW);}
+
+    fin1.writeMicroseconds(1500); fin2.writeMicroseconds(1500); fin3.writeMicroseconds(1500);
   }
 
   // // // // // // // // //
@@ -199,6 +238,8 @@ void loop() {
     digitalWrite(led, HIGH);
     update_offsets();
     q_set = q_imu;
+
+    fin1.writeMicroseconds(1500); fin2.writeMicroseconds(1500); fin3.writeMicroseconds(1500);
   }
 
   // // // // // // // // //
@@ -206,6 +247,7 @@ void loop() {
   // // // // // // // // //
   else if (state == LAUNCH) {
 
+    fin1.writeMicroseconds(1500); fin2.writeMicroseconds(1500); fin3.writeMicroseconds(1500);
   }
 
   // // // // // // // // //
@@ -213,7 +255,7 @@ void loop() {
   // // // // // // // // //
   else if (state == FLIGHT) {
     //    light
-    if (millis()-time_idle>=200) {digitalWrite(led, HIGH); time_idle = millis();} 
+    if (millis()-time_led>=200) {digitalWrite(led, HIGH); time_led = millis();} 
     else {digitalWrite(led, LOW);}
     
     quat_t q_diff = q_set * q_imu.conj();
@@ -224,7 +266,7 @@ void loop() {
     float Mbx = - sgn * Kp * q_diff.get(2) - Kd * gy;
     float Mby = - sgn * Kp * q_diff.get(3) - Kd * gz;
     float Mbz = - sgn * Kp * q_diff.get(1) - Kd * gx;
-//    allcation
+//    allocation
     Mbx *= Lx; Mby *= Ly; Mbz *= Lz;
     float sq3 = sqrt(3);
     L1 =        0 + 2*Mby + Mbz;
@@ -246,16 +288,32 @@ void loop() {
   // LOG DATA
   // // // // // // // // //
   if (millis()-time_print > 100) { time_print = millis();
+  // "t [ms], p [mbar], alt [m], T [c], ax [g], ay [g], az [g], gx [rad/s], gy [rad/s], gz [rad/s], q1, q2, q3, q4, state, u1, u2, u3"
+    String dfs = String(millis())+", "+String(pressure)+", "+String(altitude)+", "+String(temperature)+", ";
+    dfs += String(ax)+", "+String(ay)+", "+String(az)+", "+String(gx)+", "+String(gy)+", "+String(gz)+", ";
+    dfs += String(q_imu.get(0))+", "+String(q_imu.get(1))+", "+String(q_imu.get(2))+", "+String(q_imu.get(3))+", ";
+    dfs += String(state)+", "+String(u1)+", "+String(u2)+", "+String(u3);
+
+  // open the file.
+  File dataFile = SD.open(filename.c_str(), FILE_WRITE);
+
+  // if the file is available, write to it:
+  if (dataFile) {
+    dataFile.println(dfs);
+    dataFile.close();
+  }
+
 //    String ds = "ACC "+String(ax)+" "+String(ay)+" "+String(az)+" GYR "+String(gx)+" "+String(gy)+" "+String(gz)+" Q "+String(q0)+" "+String(q1)+" "+String(q2)+" "+String(q3);
 //    String ds = String(gx)+" "+String(gy)+" "+String(gz);//+" "+String(gx_r)+" "+String(gy_r)+" "+String(gz_r)+" "+String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
-    // String ds = String(mag.m.x)+" "+String(mag.m.y)+" "+String(mag.m.z);
-//   String ds = String(ax)+" "+String(ay)+" "+String(az);
+//    String ds = String(mag.m.x)+" "+String(mag.m.y)+" "+String(mag.m.z);
+//    String ds = String(ax)+" "+String(ay)+" "+String(az);
 //    String ds = String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
 //    String ds = String(ahrs.getRoll())+" "+String(ahrs.getPitch())+" "+String(ahrs.getYaw());
 //    String ds = String(q_set.w())+" "+String(q_set.x())+" "+String(q_set.y())+" "+String(q_set.z());
 //    String ds = String(q_imu.get(0))+" "+String(q_imu.get(1))+" "+String(q_imu.get(2))+" "+String(q_imu.get(3));
     String ds = String(u1)+" "+String(u2)+" "+String(u3);
     Serial.println(ds);
+  
   }
 
 }
