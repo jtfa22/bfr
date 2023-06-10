@@ -19,7 +19,6 @@ SF ahrs;
 const int chipSelect =  BUILTIN_SDCARD;
 Servo fin1; Servo fin2; Servo fin3;
 
-const int desiredDelay=50; //20 Hz
 String filename;
 
 // controls
@@ -36,8 +35,8 @@ enum bfr_state state = IDLE;
 // servo lims
 #define contr_min -100
 #define contr_max 100
-#define servo_min 1000 // microsec
-#define servo_max 2000
+#define servo_min 1200 // microsec
+#define servo_max 1800
 
 float L1, L2, L3;
 uint16_t u1, u2, u3;
@@ -109,7 +108,7 @@ void setup() {
 
 // initialize servo
   fin1.attach(0); fin2.attach(1); fin3.attach(2); 
-  fin1.writeMicroseconds(servo_min); fin2.writeMicroseconds(servo_min); fin3.writeMicroseconds(servo_max);
+  fin1.writeMicroseconds(servo_min); fin2.writeMicroseconds(servo_min); fin3.writeMicroseconds(servo_min);
   delay(500);
   fin1.writeMicroseconds(servo_max); fin2.writeMicroseconds(servo_max); fin3.writeMicroseconds(servo_max);
   delay(500);
@@ -202,7 +201,7 @@ void loop() {
   }
 
 // PAD TO LAUNCH
-  if (state == PAD && ax_r > 10) {
+  if (state == PAD && ax_r > 5) {
     if (debounce_burn) {
       if (millis()-time_burn > 250){
         state = LAUNCH; time_launch = millis(); debounce_burn = false;
@@ -287,6 +286,7 @@ void loop() {
   // // // // // // // // //
   // LOG DATA
   // // // // // // // // //
+//  log at 10 Hz
   if (millis()-time_print > 100) { time_print = millis();
   // "t [ms], p [mbar], alt [m], T [c], ax [g], ay [g], az [g], gx [rad/s], gy [rad/s], gz [rad/s], q1, q2, q3, q4, state, u1, u2, u3"
     String dfs = String(millis())+", "+String(pressure)+", "+String(altitude)+", "+String(temperature)+", ";
@@ -295,13 +295,13 @@ void loop() {
     dfs += String(state)+", "+String(u1)+", "+String(u2)+", "+String(u3);
 
   // open the file.
-  File dataFile = SD.open(filename.c_str(), FILE_WRITE);
+    File dataFile = SD.open(filename.c_str(), FILE_WRITE);
 
   // if the file is available, write to it:
-  if (dataFile) {
-    dataFile.println(dfs);
-    dataFile.close();
-  }
+    if (dataFile) {
+      dataFile.println(dfs);
+      dataFile.close();
+    }
 
 //    String ds = "ACC "+String(ax)+" "+String(ay)+" "+String(az)+" GYR "+String(gx)+" "+String(gy)+" "+String(gz)+" Q "+String(q0)+" "+String(q1)+" "+String(q2)+" "+String(q3);
 //    String ds = String(gx)+" "+String(gy)+" "+String(gz);//+" "+String(gx_r)+" "+String(gy_r)+" "+String(gz_r)+" "+String(gx_0)+" "+String(gy_0)+" "+String(gz_0);
@@ -330,67 +330,3 @@ void update_offsets() {
   }
   gx_0/=s_0v; gy_0/=s_0v; gz_0/=s_0v;
 }
-
-
-/*
-void loop() {
-  // put your main code here, to run repeatedly:
-  long int t1=millis();
-  if ((ledIter<=25 && (t1-time_0)<5000) ){//|| (ledIter<=150 && (t1-time_0)>=5000)) {
-      ledIter+=1;
-  }else if ( (t1-time_0)>=5000){
-      ledIter=0;
-  }else{
-    digitalWrite(led, HIGH);
-    ledIter=0;
-  }
-  String dataString="";
-  float pressure = ps.readPressureMillibars();
-  float altitude = ps.pressureToAltitudeMeters(pressure);
-  float temperature = ps.readTemperatureC();
-//  dataString="Time [ms]: "+ String(t1-time_0) +", p [mbar]: " + String(pressure) + ", alt [m]: "+ String(altitude) +", T [c]: " + String(temperature);
-//  dataString=String(t1-time_0) +", " + String(pressure) + ", "+ String(altitude) +", " + String(temperature);
-  float ax=imu.readFloatAccelX();
-  float ay=imu.readFloatAccelY();
-  float az=imu.readFloatAccelZ();
-  float gx=imu.readFloatGyroX();
-  float gy=imu.readFloatGyroY();
-  float gz=imu.readFloatGyroZ();
-    mag.read();
-
-  dataString=dataString+", accel [g]: " + String(ax) + " " + String(ay) + " " + String(az);
-  dataString=dataString+ ", gyro [deg/sec]: " + String(gx) + " " + String(gy) + " " + String(gz);
-//  dataString=dataString+", mag: " + String(mag.m.x) + " " + String(mag.m.y) + " " + String(mag.m.z);
-//  dataString=dataString+", " + String(ax) + ", " + String(ay) + ", " + String(az);
-//  dataString=dataString+ ", " + String(gx) + ", " + String(gy) + ", " + String(gz);
-
-float dt = (millis() - lastTime)/1000.0; lastTime=millis();
-AHRSupdate(dt,gx,gy,gz,ax,ay,az,float(mag.m.x),float(mag.m.y),float(mag.m.z));
-dataString=dataString+" q: "+" "+String(q0)+" "+String(q1)+" "+String(q2)+" "+String(q3);
-
-  // open the file.
-  File dataFile = SD.open(filename.c_str(), FILE_WRITE);
-
-  // if the file is available, write to it:
-  if (dataFile) {
-    dataFile.println(dataString);
-    dataFile.close();
-    // print to the serial port too:
-    Serial.println(dataString);
-  } else {
-    // if the file isn't open, pop up an error:
-    Serial.println("error opening datalog.txt");
-  }
-  long int t2=millis();
-  int delta=(t2-t1);
-  if (desiredDelay > delta){
-//    Serial.println(delta);
-    delay(desiredDelay-delta); // run at a reasonable not-too-fast speed
-  } else {
-     Serial.println("Violated Hz.");
-  }
-  if (ledIter==0){
-    digitalWrite(led, LOW);
-  }
-}
-*/
