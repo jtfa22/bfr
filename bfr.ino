@@ -15,7 +15,6 @@ LPS ps;
 LSM6DS3 imu;
 LIS3MDL mag;
 SF ahrs;
-//char report[80];
 const int chipSelect =  BUILTIN_SDCARD;
 Servo fin1; Servo fin2; Servo fin3;
 
@@ -27,7 +26,7 @@ enum bfr_state state = IDLE;
 
 // PD controller
 #define Kp 15
-#define Kd 1
+#define Kd 2
 // mixer gains
 #define Lx 3
 #define Ly 3
@@ -181,9 +180,6 @@ void loop() {
   // // // // // // // // //
   // STATE TRANSITION LOGIC
   // // // // // // // // //
-  if (millis()-time_0 > 10000) {
-    state = FLIGHT; time_flight = millis();
-  }
   
 // IDLE TO PAD
   float a_norm = sqrt(ax_r*ax_r + ay_r*ay_r + az_r*az_r);
